@@ -241,6 +241,16 @@
                 document.getElementById('btnStartStream').classList.remove('opacity-50', 'cursor-not-allowed');
                 document.getElementById('btnStopCapture').disabled = false;
                 document.getElementById('btnStopCapture').classList.remove('opacity-50', 'cursor-not-allowed');
+                
+                document.getElementById('btnMuteAudio').style.display = localStream.getAudioTracks().length > 0 ? 'block' : 'none';
+
+                // Ensure it's unmuted internally when captured newly
+                isAudioMuted = false;
+                const btnIcon = document.getElementById('muteIcon');
+                btnIcon.setAttribute('data-lucide', 'mic');
+                btnIcon.classList.remove('text-red-500');
+                btnIcon.classList.add('text-green-400');
+                lucide.createIcons();
 
                 if (localStream.getAudioTracks().length > 0) {
                     setupVisualizer(localStream);
@@ -271,6 +281,7 @@
             document.getElementById('btnStartStream').classList.add('opacity-50', 'cursor-not-allowed');
             document.getElementById('btnStopCapture').disabled = true;
             document.getElementById('btnStopCapture').classList.add('opacity-50', 'cursor-not-allowed');
+            document.getElementById('btnMuteAudio').style.display = 'none';
             
             if (isStreaming) {
                 window.stopStream();
@@ -527,6 +538,28 @@
             await deleteDoc(doc(db, "signage_ticker", docId));
         };
 
+        let isAudioMuted = false;
+        window.toggleMuteAudio = function() {
+            if (!localStream) return;
+            const audioTracks = localStream.getAudioTracks();
+            if (audioTracks.length === 0) return;
+            
+            isAudioMuted = !isAudioMuted;
+            audioTracks.forEach(t => t.enabled = !isAudioMuted);
+            
+            const btnIcon = document.getElementById('muteIcon');
+            if (isAudioMuted) {
+                btnIcon.setAttribute('data-lucide', 'mic-off');
+                btnIcon.classList.remove('text-green-400');
+                btnIcon.classList.add('text-red-500');
+            } else {
+                btnIcon.setAttribute('data-lucide', 'mic');
+                btnIcon.classList.remove('text-red-500');
+                btnIcon.classList.add('text-green-400');
+            }
+            lucide.createIcons();
+        };
+
         window.controlPrompter = async function(action) {
             try {
                 await setDoc(doc(db, 'artifacts', 'broadcast-system', 'platform', 'state'), {
@@ -603,6 +636,11 @@
                 
                 <div class="relative flex-1 bg-black rounded-2xl overflow-hidden border-2 border-slate-700 shadow-xl flex items-center justify-center min-h-[300px]">
                     <video id="localVideo" class="w-full h-full object-contain" autoplay muted playsinline></video>
+                    
+                    <button id="btnMuteAudio" onclick="toggleMuteAudio()" class="absolute bottom-4 right-4 bg-slate-800/80 hover:bg-slate-700 p-2.5 rounded-full text-white border border-slate-600 transition-colors shadow-lg z-20" title="Silenciar / Activar Audio Transmitido" style="display:none;">
+                        <i id="muteIcon" data-lucide="mic" class="w-5 h-5 text-green-400"></i>
+                    </button>
+
                     <div id="noSignal" class="absolute inset-0 flex flex-col items-center justify-center text-slate-500 bg-slate-900/50">
                         <i data-lucide="video-off" class="w-12 h-12 mb-3 opacity-30"></i>
                         <p class="font-bold uppercase tracking-widest opacity-50 text-xs">Sin Señal</p>
