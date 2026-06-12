@@ -4,6 +4,7 @@ const fs = require('fs');
 const https = require('https');
 const crypto = require('crypto');
 const { autoUpdater } = require('electron-updater');
+const { exec } = require('child_process');
 
 // Sin restricción de puertos para permitir que el túnel TURN funcione libremente
 
@@ -30,9 +31,18 @@ function createWindow () {
   win.loadFile('app_pc_live.html');
 }
 
-// Para prevenir problemas de GPU en algunas PCs
+// --- OPTIMIZACIONES PARA MINI PCs (SIN GPU DEDICADA) ---
+// Evitar que el scroll o animaciones saturen el procesador
+app.commandLine.appendSwitch('disable-smooth-scrolling');
+// Mejorar el rendimiento de la composición de capas (overlay)
+app.commandLine.appendSwitch('enable-hardware-overlays');
+// Deshabilitar características pesadas de Chromium que no usamos
+app.commandLine.appendSwitch('disable-features', 'CalculateNativeWinOcclusion');
+// Forzar el uso de la GPU integrada para todo
 app.commandLine.appendSwitch('ignore-gpu-blocklist');
-app.commandLine.appendSwitch('disable-features', 'OutOfBlinkCors');
+// Activar decodificación de HEVC (H.265) por hardware si el sistema lo soporta
+app.commandLine.appendSwitch('enable-features', 'PlatformHEVCDecoderSupport');
+
 // Esto permite que el autoplay funcione siempre en Chromium
 app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required');
 
@@ -40,6 +50,19 @@ app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required');
 ipcMain.on('restart_app', () => {
     app.relaunch();
     app.exit();
+});
+
+// Escuchar comando para abrir/cerrar prompter remoto
+ipcMain.on('control-prompter', (event, action) => {
+    if (action === 'start') {
+        exec('start "" "%USERPROFILE%\\Desktop\\prompter.lnk" || start "" "%PUBLIC%\\Desktop\\prompter.lnk"', (err) => {
+            if(err) console.error("Error abriendo prompter:", err);
+        });
+    } else if (action === 'stop') {
+        exec('taskkill /IM msedge.exe /F', (err) => {
+            if(err) console.error("Error cerrando msedge:", err);
+        });
+    }
 });
 
 // -- GESTOR DE CACHE LOCAL DE MEDIOS --
@@ -79,6 +102,8 @@ function downloadFile(url, dest) {
     });
 }
 
+const downloadingFiles = new Map(); // Para rastrear descargas en progreso
+
 ipcMain.handle('sync_media', async (event, mediaList) => {
     try {
         const keepFiles = new Set();
@@ -93,14 +118,31 @@ ipcMain.handle('sync_media', async (event, mediaList) => {
             keepFiles.add(filename);
             
             try {
-                await downloadFile(media.url, dest);
-                mappedList.push({
-                    ...media,
-                    url: require('url').pathToFileURL(dest).href
-                });
+                if (!fs.existsSync(dest)) {
+                    // Evitar descargas duplicadas si ya se está descargando
+                    if (downloadingFiles.has(filename)) {
+                        console.log(`Ya se está descargando: ${filename}, esperando...`);
+                        await downloadingFiles.get(filename);
+                    } else {
+                        console.log(`Descargando a caché: ${filename}`);
+                        const downloadPromise = downloadFile(media.url, dest);
+                        downloadingFiles.set(filename, downloadPromise);
+                        await downloadPromise;
+                        downloadingFiles.delete(filename);
+                    }
+                }
+                
+                // Solo si el archivo existe físicamente lo agregamos a la lista
+                if (fs.existsSync(dest)) {
+                    mappedList.push({
+                        ...media,
+                        url: require('url').pathToFileURL(dest).href
+                    });
+                }
             } catch (err) {
                 console.error("Error descargando", media.url, err);
-                mappedList.push(media);
+                downloadingFiles.delete(filename);
+                // NO HAREMOS FALLBACK A LA NUBE. Si falla, no se reproduce hasta que se descargue bien en el siguiente intento.
             }
         }
         
@@ -116,11 +158,16 @@ ipcMain.handle('sync_media', async (event, mediaList) => {
         return mappedList;
     } catch(e) {
         console.error("Error global sync:", e);
-        return mediaList;
+        return []; // Nunca devolver mediaList de la nube
     }
 });
 
 app.whenReady().then(() => {
+    // Forzar el auto-arranque con Windows
+    app.setLoginItemSettings({
+        openAtLogin: true,
+        path: app.getPath("exe")
+    });
     createWindow();
 
     // Iniciar auto-updater

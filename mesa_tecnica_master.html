@@ -4,8 +4,22 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Mesa Técnica + Cloud - COOSAJO</title>
+    <!-- PWA Settings -->
+    <link rel="manifest" href="manifest.json">
+    <meta name="theme-color" content="#0f172a">
+    <link rel="apple-touch-icon" href="LOGO COOSAJO SIN ESLOGAN.png">
+    
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://unpkg.com/lucide@latest"></script>
+    
+    <!-- Service Worker Registration -->
+    <script>
+        if ('serviceWorker' in navigator) {
+            navigator.serviceWorker.register('./sw.js').then(() => {
+                console.log('Service Worker Registered');
+            });
+        }
+    </script>
     <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;900&display=swap');
@@ -80,8 +94,9 @@
                                 if (!params.encodings || params.encodings.length === 0) {
                                     params.encodings = [{}];
                                 }
-                                params.encodings[0].maxBitrate = 4000000; // Cap at 4 Mbps per screen
+                                params.encodings[0].maxBitrate = 3000000; // Limitar a 3 Mbps máximo
                                 params.encodings[0].maxFramerate = 30;
+                                params.encodings[0].scaleResolutionDownBy = 1.0; // Forzar que no le baje la resolución
                                 sender.setParameters(params).catch(e => console.error("Error limitando bitrate:", e));
                             }
                         });
@@ -170,8 +185,9 @@
                 } catch(eVid) {
                     throw new Error("VIDEO: " + (eVid.name || "Error") + " - " + (eVid.message || "Desconocido"));
                 }
+                const vHint = document.getElementById('videoHint') ? document.getElementById('videoHint').value : 'motion';
                 vStream.getVideoTracks().forEach(t => {
-                    t.contentHint = 'motion';
+                    t.contentHint = vHint; // 'motion' prioriza los fps (evita lag), 'detail' prioriza la nitidez
                     finalStream.addTrack(t);
                 });
 
@@ -267,16 +283,21 @@
                 return;
             }
             if(confirm("¡ATENCIÓN! Esto interrumpirá la publicidad en TODAS las pantallas de las agencias. ¿Continuar?")) {
-                isStreaming = true;
-                document.getElementById('btnStartStream').classList.add('hidden');
-                document.getElementById('btnStopStream').classList.remove('hidden');
-                document.getElementById('liveBlink').classList.remove('hidden');
-
-                await setDoc(doc(db, 'artifacts', 'broadcast-system', 'platform', 'state'), {
-                    isLive: true,
-                    masterId: masterPeerId,
-                    timestamp: Date.now()
-                });
+                try {
+                    await setDoc(doc(db, 'artifacts', 'broadcast-system', 'platform', 'state'), {
+                        isLive: true,
+                        masterId: masterPeerId,
+                        timestamp: Date.now()
+                    });
+                    
+                    isStreaming = true;
+                    document.getElementById('btnStartStream').classList.add('hidden');
+                    document.getElementById('btnStopStream').classList.remove('hidden');
+                    document.getElementById('liveBlink').classList.remove('hidden');
+                } catch (e) {
+                    console.error("Error iniciando transmisión", e);
+                    alert("ERROR DE PERMISOS: No se pudo enviar la señal a Firebase.\n\nPor favor revisa que cambiaste las Reglas de Firebase a 'allow read, write: if true;' y le diste a PUBLICAR.\n\nError técnico: " + e.message);
+                }
             }
         }
 
@@ -340,9 +361,14 @@
                                     <div class="w-2 h-2 rounded-full ${dotColor}"></div>
                                     <span class="text-slate-200 text-[10px] font-bold uppercase truncate max-w-[120px]">${doc.id}</span>
                                 </div>
-                                <div class="flex flex-col items-end">
-                                    <span class="${statusColor} text-[9px] font-bold uppercase">${data.status}</span>
-                                    <span class="text-slate-500 text-[8px] font-mono">v${data.version || '?'} ${data.peerConnected ? '(Red OK)' : '(Red Fallando)'}</span>
+                                <div class="flex items-center gap-3">
+                                    <div class="flex flex-col items-end">
+                                        <span class="${statusColor} text-[9px] font-bold uppercase">${data.status}</span>
+                                        <span class="text-slate-500 text-[8px] font-mono">v${data.version || '?'} ${data.peerConnected ? '(Red OK)' : '(Red Fallando)'}</span>
+                                    </div>
+                                    <button onclick="restartAgency('${doc.id}')" class="bg-red-500 hover:bg-red-600 text-white text-[8px] font-bold px-2 py-1 rounded transition-colors" title="Forzar reinicio de esta pantalla">
+                                        <i data-lucide="power" class="w-3 h-3"></i>
+                                    </button>
                                 </div>
                             </div>
                         `;
@@ -355,6 +381,21 @@
             });
         }
         startAgenciesMonitor();
+
+        window.restartAgency = async (agencyId) => {
+            if(confirm(`¿Estás seguro de forzar el reinicio de la pantalla en ${agencyId}?`)) {
+                try {
+                    const { doc: firestoreDoc, setDoc: firestoreSetDoc } = await import("https://www.gstatic.com/firebasejs/10.8.1/firebase-firestore.js");
+                    await firestoreSetDoc(firestoreDoc(db, "artifacts", "broadcast-system", "agencies", agencyId), {
+                        forceRestart: Date.now()
+                    }, { merge: true });
+                    // No necesitas mostrar alert, la pantalla se reiniciará sola en unos segundos
+                } catch(e) {
+                    console.error("Error al enviar reinicio", e);
+                    alert("Error detallado al enviar señal: " + e.message);
+                }
+            }
+        };
 
         function setupVisualizer(stream) {
             const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
@@ -406,21 +447,27 @@
                     const formData = new FormData();
                     formData.append('file', file);
                     formData.append('upload_preset', uploadPreset);
-                    const uploadType = file.type.startsWith('video') ? 'video' : 'image';
+                    const uploadType = file.type.startsWith('video') ? 'video' : 'auto'; // 'auto' es más seguro que 'image' en Cloudinary
                     const cloudRes = await fetch(`https://api.cloudinary.com/v1_1/${cloudName}/${uploadType}/upload`, {
                         method: 'POST',
                         body: formData
                     });
-                    if (!cloudRes.ok) throw new Error("Fallo en Cloudinary");
+                    if (!cloudRes.ok) {
+                        const errData = await cloudRes.json();
+                        throw new Error(errData.error?.message || "Error desconocido de Cloudinary");
+                    }
                     const cloudData = await cloudRes.json();
                     const secureUrl = cloudData.secure_url;
                     bar.style.width = '80%';
                     statusText.innerText = "Guardando en Firebase...";
-                    const docData = { fileName: file.name, type: uploadType, url: secureUrl, timestamp: Date.now() };
-                    if (uploadType === 'image') docData.durationSecs = bannerDuration;
+                    const docData = { fileName: file.name, type: uploadType === 'auto' ? (file.type.startsWith('image')?'image':'auto') : 'video', url: secureUrl, timestamp: Date.now() };
+                    if (file.type.startsWith('image')) docData.durationSecs = bannerDuration;
                     await addDoc(collection(db, "signage_media"), docData);
                     bar.style.width = '100%';
-                } catch (e) { console.error("Fallo subida", e); alert("Error subiendo: " + file.name); }
+                } catch (e) { 
+                    console.error("Fallo subida", e); 
+                    alert("Error subiendo " + file.name + ":\n\n" + e.message + "\n\n(Revisa que el Upload Preset sea 'Unsigned')"); 
+                }
             }
             setTimeout(() => {
                 document.getElementById('uploadProgress').classList.add('hidden');
@@ -476,10 +523,8 @@
             input.value = '';
         }
 
-        window.deleteTicker = async function(id) {
-            if(confirm("¿Borrar este texto?")) {
-                await deleteDoc(doc(db, "signage_ticker", id));
-            }
+        window.deleteTicker = async function(docId) {
+            await deleteDoc(doc(db, "signage_ticker", docId));
         };
 
         window.controlPrompter = async function(action) {
@@ -590,18 +635,29 @@
                         </div>
                     </div>
 
-                    <div class="mb-4">
-                        <label class="block text-[9px] font-bold text-slate-500 mb-1 uppercase tracking-widest">Calidad de Video</label>
-                        <select id="videoQuality" class="w-full bg-slate-900 text-white font-bold text-[10px] rounded border border-slate-700 p-2 outline-none focus:border-blue-500">
-                            <option value="1080">1080p a 30fps (Alta Calidad)</option>
-                            <option value="720" selected>720p a 24fps (Recomendado)</option>
-                            <option value="480">480p a 24fps (Ahorro Máximo)</option>
-                        </select>
+                    <div class="mb-4 grid grid-cols-2 gap-3">
+                        <div>
+                            <label class="block text-[9px] font-bold text-slate-500 mb-1 uppercase tracking-widest">Resolución</label>
+                            <select id="videoQuality" class="w-full bg-slate-900 text-white font-bold text-[10px] rounded border border-slate-700 p-2 outline-none focus:border-blue-500">
+                                <option value="1080">1080p a 30fps (Alta Calidad)</option>
+                                <option value="720" selected>720p a 24fps (Recomendado)</option>
+                                <option value="480">480p a 24fps (Ahorro Máximo)</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label class="block text-[9px] font-bold text-slate-500 mb-1 uppercase tracking-widest">Optimización de Red</label>
+                            <select id="videoHint" class="w-full bg-slate-900 text-white font-bold text-[10px] rounded border border-slate-700 p-2 outline-none focus:border-blue-500" title="Si hay lag, priorizar fluidez baja la nitidez pero evita que el video se trabe.">
+                                <option value="motion" selected>Fluidez (Sin Lag)</option>
+                                <option value="detail">Nitidez (Puede causar Lag)</option>
+                            </select>
+                        </div>
                     </div>
 
-                    <button onclick="startCustomCapture()" class="w-full bg-slate-700 hover:bg-slate-600 p-3 rounded-xl flex items-center justify-center gap-2 transition-all font-black uppercase text-[11px] tracking-wider shadow-lg text-white mb-2">
-                        <i data-lucide="power" class="w-4 h-4"></i> 2. Capturar Seleccionados
-                    </button>
+                    <div class="flex gap-2 mb-2">
+                        <button onclick="startCustomCapture()" class="w-full bg-slate-700 hover:bg-slate-600 p-3 rounded-xl flex items-center justify-center gap-2 transition-all font-black uppercase text-[11px] tracking-wider shadow-lg text-white mb-2">
+                            <i data-lucide="power" class="w-4 h-4"></i> 2. Capturar Seleccionados
+                        </button>
+                    </div>
                 </div>
 
                 <div class="flex gap-4">

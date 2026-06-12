@@ -1,0 +1,17 @@
+{
+  "name": "Mesa Técnica COOSAJO",
+  "short_name": "Mesa Técnica",
+  "description": "Control General de Cartelería y Transmisión WebRTC",
+  "start_url": "./mesa_tecnica_master.html",
+  "display": "standalone",
+  "background_color": "#0f172a",
+  "theme_color": "#22c55e",
+  "icons": [
+    {
+      "src": "LOGO COOSAJO SIN ESLOGAN.png",
+      "sizes": "192x192 512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}

@@ -42,7 +42,7 @@
 
         /* Marquesina (Ticker) */
         @keyframes scroll-left { 0% { transform: translateX(100vw); } 100% { transform: translateX(-100%); } }
-        .animate-marquee { animation: scroll-left 40s linear infinite; }
+        .animate-marquee { animation: scroll-left 40s linear infinite; will-change: transform; }
     </style>
 </head>
 <body class="w-full h-screen flex flex-col relative bg-[#f1f5f9]">
@@ -86,16 +86,13 @@
         
         <!-- SIDEBAR PARA BANNERS (IMÁGENES) -->
         <div id="sidebar" class="h-full relative overflow-hidden flex-shrink-0 video-frame">
-            <img id="mainBannerBlur" src="" class="absolute inset-0 w-full h-full object-cover blur-3xl opacity-0 z-0 transition-opacity duration-1000 scale-125" />
-            
-            <img id="mainBanner" src="" class="absolute inset-0 w-full h-full object-contain z-10 opacity-0 transition-opacity duration-1000 drop-shadow-2xl" />
+            <img id="mainBanner" src="" class="absolute inset-0 w-full h-full object-cover z-10 opacity-0 transition-opacity duration-1000 drop-shadow-2xl" />
             <div id="emptyBannerText" class="absolute inset-0 flex items-center justify-center text-slate-400 font-bold uppercase tracking-widest text-xs opacity-50 z-0">Sin Banners</div>
         </div>
 
         <div class="flex-1 min-w-0 h-full relative overflow-hidden flex items-center justify-center video-frame">
-            
-            <video id="mainVideoBlur" class="absolute inset-0 w-full h-full object-cover blur-3xl opacity-0 z-0 transition-opacity duration-1000 scale-125" playsinline webkit-playsinline muted loop></video>
-            <video id="mainVideo" class="absolute inset-0 w-full h-full object-contain z-10 opacity-0 transition-opacity duration-1000 drop-shadow-2xl" playsinline webkit-playsinline></video>
+            <video id="mainVideo2" class="absolute inset-0 w-full h-full object-cover z-10 opacity-0 drop-shadow-2xl" playsinline webkit-playsinline></video>
+            <video id="mainVideo" class="absolute inset-0 w-full h-full object-cover z-10 opacity-0 drop-shadow-2xl" playsinline webkit-playsinline></video>
             
             <div id="emptyVideoText" class="absolute inset-0 flex flex-col items-center justify-center bg-transparent z-0">
                 <img src="LOGO COOSAJO SIN ESLOGAN.png" class="h-24 opacity-20 mb-4 brightness-0 invert" onerror="this.style.display='none'">
@@ -187,13 +184,33 @@
                 await setDoc(doc(db, "artifacts", "broadcast-system", "agencies", agencyId), {
                     lastPing: Date.now(),
                     status: currentStatus,
-                    version: "1.0.18",
+                    version: "1.0.40",
                     peerConnected: peer && !peer.disconnected
-                });
+                }, { merge: true }); // <-- MERGE TRUE PARA NO SOBRESCRIBIR COMANDOS DE REINICIO
             } catch(e) { console.error("Heartbeat fail", e); }
         }
         setInterval(sendHeartbeat, 10000); // Latido cada 10 segundos
         setTimeout(sendHeartbeat, 3000);
+
+        // ESCUCHAR COMANDOS ESPECÍFICOS PARA ESTA AGENCIA (Reinicio individual)
+        let lastAgencyRestart = 0;
+        onSnapshot(doc(db, "artifacts", "broadcast-system", "agencies", agencyId), (docSnap) => {
+            if (docSnap.exists()) {
+                const data = docSnap.data();
+                if (data.forceRestart && data.forceRestart > lastAgencyRestart) {
+                    if (lastAgencyRestart === 0) {
+                        lastAgencyRestart = data.forceRestart; // Ignorar el inicial
+                    } else {
+                        console.log("REINICIO INDIVIDUAL SOLICITADO DESDE MESA TÉCNICA!");
+                        if (window.electronAPI) {
+                            window.electronAPI.restartApp();
+                        } else {
+                            window.location.reload();
+                        }
+                    }
+                }
+            }
+        });
 
         let imagesPlaylist = [];
         let videosPlaylist = [];
@@ -238,6 +255,13 @@
                 if (state.marqueeSpeed) {
                     const marquee = document.getElementById('marqueeContainer');
                     if (marquee) marquee.style.animationDuration = `${state.marqueeSpeed}s`;
+                }
+                
+                if (state.prompterCommand && window.electronAPI) {
+                    if (!window.lastPrompterTimestamp || state.prompterCommand.timestamp > window.lastPrompterTimestamp) {
+                        window.lastPrompterTimestamp = state.prompterCommand.timestamp;
+                        window.electronAPI.controlPrompter(state.prompterCommand.action);
+                    }
                 }
                 
                 if (state.isLive && state.masterId) {
@@ -390,12 +414,18 @@
             });
         }
 
+        let activeVideoPlayer = 1;
+
         function playNextVideo() {
-            const blurEl = document.getElementById('mainVideoBlur');
+            const v1 = document.getElementById('mainVideo');
+            const v2 = document.getElementById('mainVideo2');
+
             if (isLiveActive || videosPlaylist.length === 0) {
                 isVideoLooping = false;
-                mainVideo.style.opacity = '0';
-                if(blurEl) { blurEl.style.opacity = '0'; blurEl.pause(); }
+                v1.style.opacity = '0';
+                v2.style.opacity = '0';
+                v1.pause();
+                v2.pause();
                 return;
             }
             isVideoLooping = true;
@@ -403,32 +433,55 @@
             if (currentVideoIndex >= videosPlaylist.length) currentVideoIndex = 0;
             
             const file = videosPlaylist[currentVideoIndex];
-            mainVideo.src = file.url;
-            mainVideo.style.opacity = "1";
-            mainVideo.muted = false; // <-- Arreglo crítico para que regrese el audio
-            mainVideo.volume = 1.0;
-            
-            if (blurEl) {
-                blurEl.src = file.url;
-                blurEl.style.opacity = "0.5";
-                blurEl.muted = true; // <-- Evita eco
-                blurEl.play().catch(e => console.log("Aura blocked", e));
+            const nextFile = videosPlaylist[(currentVideoIndex + 1) % videosPlaylist.length];
+
+            const activeVid = activeVideoPlayer === 1 ? v1 : v2;
+            const inactiveVid = activeVideoPlayer === 1 ? v2 : v1;
+
+            // Si la URL cargada no es exactamente la que toca (por ser el primer video o cambio de lista)
+            if (activeVid.dataset.loadedUrl !== file.url) {
+                activeVid.src = file.url;
+                activeVid.dataset.loadedUrl = file.url;
+                activeVid.load();
             }
 
-            mainVideo.play().catch(() => {
-                mainVideo.muted = true;
-                mainVideo.play();
+            activeVid.style.opacity = "1";
+            activeVid.muted = false;
+            activeVid.volume = 1.0;
+            
+            // Ocultar el inactivo
+            inactiveVid.style.opacity = "0";
+            inactiveVid.pause();
+            
+            // Pre-cargar el SIGUIENTE video en el inactivo silenciosamente (Double Buffering)
+            if (videosPlaylist.length > 1) {
+                inactiveVid.src = nextFile.url;
+                inactiveVid.dataset.loadedUrl = nextFile.url;
+                inactiveVid.preload = "auto";
+                inactiveVid.load(); // Forzar carga en memoria (sin decodificar en pantalla)
+            }
+
+            activeVid.play().catch(() => {
+                activeVid.muted = true;
+                activeVid.play();
             });
 
-            mainVideo.onerror = () => {
-                console.error("Error al cargar o reproducir el video:", file.url);
+            // Limpiar eventos del inactivo para que no disparen basura
+            inactiveVid.onerror = null;
+            inactiveVid.onended = null;
+
+            activeVid.onerror = () => {
+                console.error("Error al cargar video:", file.url);
                 setTimeout(() => {
+                    activeVideoPlayer = activeVideoPlayer === 1 ? 2 : 1;
                     currentVideoIndex = (currentVideoIndex + 1) % videosPlaylist.length;
                     playNextVideo();
                 }, 2000);
             };
 
-            mainVideo.onended = () => {
+            activeVid.onended = () => {
+                // Intercambiar reproductor
+                activeVideoPlayer = activeVideoPlayer === 1 ? 2 : 1;
                 currentVideoIndex = (currentVideoIndex + 1) % videosPlaylist.length;
                 playNextVideo();
             };
@@ -446,12 +499,6 @@
             const file = imagesPlaylist[currentImageIndex];
             mainBanner.src = file.url;
             mainBanner.style.opacity = "1";
-            
-            const blurEl = document.getElementById('mainBannerBlur');
-            if(blurEl) {
-                blurEl.src = file.url;
-                blurEl.style.opacity = "0.5";
-            }
             
             const waitTime = (file.durationSecs || 10) * 1000;
             
