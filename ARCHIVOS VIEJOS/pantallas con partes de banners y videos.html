@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Pantalla Agencia COOSAJO</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;900&display=swap');
+        body { font-family: 'Inter', sans-serif; overflow: hidden; background-color: #f1f5f9; margin: 0; cursor: none; }
+        .bg-abstract { background-image: url('abstract-white-background-with-elegant-curving-lin-2026-01-07-23-20-12-utc.jpg'); background-size: cover; background-position: center; opacity: 0.6; position: absolute; inset: 0; z-index: 0; }
+        @keyframes scroll-left { 0% { transform: translateX(100vw); } 100% { transform: translateX(-100%); } }
+        .animate-marquee { animation: scroll-left 45s linear infinite; }
+        @keyframes progress-fill { 0% { width: 0%; } 100% { width: 100%; } }
+        .animate-progress { animation: progress-fill 8s linear infinite; }
+        .video-frame { border: 12px solid #ffffff; border-radius: 2.5rem; box-shadow: 0 25px 50px -12px rgba(0,0,0,0.25); background: #000; }
+        #sidebar { transition: all 0.8s cubic-bezier(0.4, 0, 0.2, 1); width: 431px; border-width: 12px; }
+        #sidebar.hidden-sidebar { width: 0; opacity: 0; margin-right: -1.5rem; transform: translateX(-40px); border-width: 0; padding: 0; }
+        .status-badge { background: rgba(15, 23, 42, 0.4); backdrop-filter: blur(8px); border: 1px solid rgba(255, 255, 255, 0.1); }
+    </style>
+</head>
+<body class="w-full h-screen flex flex-col relative" onclick="enableAudio()">
+    <div class="bg-abstract"></div>
+    <header class="relative z-50 h-[125px] bg-white border-b-[6px] border-[#158e45] flex items-center justify-between px-10 shadow-lg">
+        <div class="flex items-center gap-3">
+            <img src="LOGO COOSAJO SIN ESLOGAN.png" alt="COOSAJO" class="h-20 object-contain" onerror="this.src='https://placehold.co/200x80?text=COOSAJO'">
+        </div>
+        <div class="flex items-center gap-10">
+            <div class="text-right border-l-[3px] border-slate-100 pl-10">
+                <div id="clockTime" class="font-black text-4xl text-[#172e59] leading-none tracking-tighter">--:--</div>
+                <div id="clockDate" class="text-[10px] text-[#158e45] font-black uppercase mt-1 tracking-widest">Cargando...</div>
+            </div>
+        </div>
+    </header>
+
+    <main class="relative z-10 flex-1 flex gap-6 p-6 min-h-0">
+        <div id="sidebar" class="h-full relative overflow-hidden video-frame flex-shrink-0 border-none bg-slate-900">
+            <div id="bannersContainer" class="absolute inset-0 w-full h-full"></div>
+            <div id="progressContainer" class="absolute top-5 left-0 right-0 flex justify-center gap-1.5 z-20 px-6"></div>
+        </div>
+        <div class="flex-1 min-w-0 h-full relative overflow-hidden video-frame flex items-center justify-center bg-black">
+            <video id="liveVideo" class="absolute inset-0 w-full h-full object-contain z-10 opacity-0 transition-opacity duration-1000" autoplay muted playsinline></video>
+            <div id="waitingUI" class="absolute inset-0 z-20 flex flex-col items-center justify-center bg-slate-900/40">
+                <h2 class="text-4xl font-black uppercase tracking-[0.4em] text-slate-300 mb-8 italic">Esperando Señal...</h2>
+                <div class="status-badge px-8 py-3 rounded-2xl"><p id="netStatus" class="text-[#158e45] font-bold text-xs uppercase tracking-widest animate-pulse">Autenticando...</p></div>
+            </div>
+        </div>
+    </main>
+
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getFirestore, doc, onSnapshot } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+        import { getAuth, signInAnonymously, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+
+        const firebaseConfig = JSON.parse(__firebase_config);
+        const app = initializeApp(firebaseConfig);
+        const db = getFirestore(app);
+        const auth = getAuth(app);
+
+        const liveVideo = document.getElementById('liveVideo');
+        const waitingUI = document.getElementById('waitingUI');
+        const sidebar = document.getElementById('sidebar');
+        const netStatus = document.getElementById('netStatus');
+        const peer = new Peer();
+        let activeCall = null;
+
+        // Autenticación anónima obligatoria antes de cualquier acceso a datos
+        signInAnonymously(auth).catch(err => console.error("Error de auth:", err));
+
+        onAuthStateChanged(auth, (user) => {
+            if (user) {
+                netStatus.textContent = "Conectado. Esperando emisión...";
+                onSnapshot(doc(db, 'artifacts', 'broadcast-system', 'platform', 'state'), (docSnap) => {
+                    if (!docSnap.exists()) return;
+                    const state = docSnap.data();
+                    if (state.isLive) {
+                        netStatus.textContent = "Señal detectada...";
+                        conectarVideo(state.masterId);
+                    } else {
+                        desconectarVideo();
+                    }
+                }, (err) => console.error("Error en snapshot:", err));
+            }
+        });
+
+        function conectarVideo(masterId) {
+            if (activeCall) return;
+            activeCall = peer.call(masterId, new MediaStream());
+            activeCall.on('stream', (stream) => {
+                liveVideo.srcObject = stream;
+                liveVideo.play().catch(() => {});
+                sidebar.classList.add('hidden-sidebar');
+                waitingUI.classList.add('hidden');
+                liveVideo.style.opacity = "1";
+            });
+        }
+
+        function desconectarVideo() {
+            if (activeCall) {
+                activeCall.close();
+                activeCall = null;
+            }
+            liveVideo.srcObject = null;
+            liveVideo.style.opacity = "0";
+            sidebar.classList.remove('hidden-sidebar');
+            waitingUI.classList.remove('hidden');
+        }
+
+        setInterval(() => {
+            const now = new Date();
+            document.getElementById('clockTime').textContent = now.toLocaleTimeString('es-GT', {hour:'2-digit', minute:'2-digit', hour12: true});
+            document.getElementById('clockDate').textContent = now.toLocaleDateString('es-GT', {weekday:'long', day:'numeric', month:'long'}).toUpperCase();
+        }, 1000);
+
+        window.enableAudio = () => { liveVideo.muted = false; };
+    </script>
+</body>
+</html>

@@ -1,0 +1,747 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Mesa Técnica + Cloud - COOSAJO</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;900&display=swap');
+        body { font-family: 'Inter', sans-serif; background-color: #0f172a; color: white; }
+        .glass { background: rgba(30, 41, 59, 0.7); backdrop-filter: blur(10px); border: 1px solid rgba(255,255,255,0.1); }
+        .vumeter-bar { transition: height 0.1s ease; }
+    </style>
+
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/10.8.1/firebase-app.js";
+        import { getFirestore, collection, addDoc, deleteDoc, doc, setDoc, onSnapshot } from "https://www.gstatic.com/firebasejs/10.8.1/firebase-firestore.js";
+        import { getAuth, signInAnonymously } from "https://www.gstatic.com/firebasejs/10.8.1/firebase-auth.js";
+
+        const firebaseConfig = {
+            apiKey: "AIzaSyC643shoxAKAaZszMw2RhZXLdZVhniw8xo",
+            authDomain: "coosajo-tv.firebaseapp.com",
+            projectId: "coosajo-tv",
+            storageBucket: "coosajo-tv.firebasestorage.app",
+            messagingSenderId: "430153476647",
+            appId: "1:430153476647:web:d8925c9a6e8bdad0123c02",
+            measurementId: "G-0DDHHXY21D"
+        };
+        const app = initializeApp(firebaseConfig);
+        const db = getFirestore(app);
+        const auth = getAuth(app);
+
+        signInAnonymously(auth).catch(err => console.error("Error de auth:", err));
+
+        // Cloudinary Config
+        const cloudName = "dr0xoodsd";
+        const uploadPreset = "coosajo_preset";
+
+        // ==========================================
+        // MÓDULO DE TRANSMISIÓN EN VIVO (WEBRTC)
+        // ==========================================
+        let localStream;
+        let peer;
+        let masterPeerId = null;
+        let isStreaming = false;
+
+        window.initPeer = function() {
+            try {
+                const randomId = Math.floor(1000 + Math.random() * 9000);
+                peer = new Peer(`COOSAJO-${randomId}`, {
+                    config: {
+                        'iceServers': [
+                            { urls: 'stun:stun.l.google.com:19302' },
+                            {
+                                urls: 'turn:openrelay.metered.ca:443?transport=tcp',
+                                username: 'openrelayproject',
+                                credential: 'openrelayproject'
+                            }
+                        ]
+                    }
+                });
+
+                peer.on('open', (id) => {
+                    masterPeerId = id;
+                    document.getElementById('peer-id').textContent = id;
+                });
+                peer.on('error', (err) => console.error("PeerJS Error:", err));
+                
+                peer.on('call', (call) => {
+                    console.log("¡Llamada recibida de una pantalla!");
+                    if (localStream) {
+                        call.answer(localStream);
+                        
+                        const pc = call.peerConnection;
+                        pc.getSenders().forEach(sender => {
+                            if (sender.track && sender.track.kind === 'video') {
+                                const params = sender.getParameters();
+                                if (!params.encodings || params.encodings.length === 0) {
+                                    params.encodings = [{}];
+                                }
+                                params.encodings[0].maxBitrate = 4000000; // Cap at 4 Mbps per screen
+                                params.encodings[0].maxFramerate = 30;
+                                sender.setParameters(params).catch(e => console.error("Error limitando bitrate:", e));
+                            }
+                        });
+                    }
+                });
+            } catch (e) {
+                document.getElementById('peer-id').textContent = "BLOQUEADO";
+            }
+        };
+
+        window.loadDevices = async function() {
+            try {
+                try {
+                    const temp1 = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+                    temp1.getTracks().forEach(t => t.stop());
+                } catch(e1) {
+                    try {
+                        const temp2 = await navigator.mediaDevices.getUserMedia({ audio: true });
+                        temp2.getTracks().forEach(t => t.stop());
+                    } catch(e2) {
+                        console.log("Aviso: Nombres de cámara genéricos por permisos.", e2);
+                    }
+                }
+
+                const devices = await navigator.mediaDevices.enumerateDevices();
+                const videoSelect = document.getElementById('videoSource');
+                const audioSelect = document.getElementById('audioSource');
+
+                videoSelect.innerHTML = '<option value="screen">🖥️ Pantallas y Ventanas (Recomendado)</option>';
+                audioSelect.innerHTML = '<option value="screen">Igual que el Video</option><option value="none">Sin Audio</option>';
+
+                devices.forEach(device => {
+                    if (device.kind === 'videoinput') {
+                        const opt = document.createElement('option');
+                        opt.value = device.deviceId;
+                        opt.text = device.label || `Cámara Externa detectada`;
+                        videoSelect.appendChild(opt);
+                    } else if (device.kind === 'audioinput') {
+                        const opt = document.createElement('option');
+                        opt.value = device.deviceId;
+                        opt.text = device.label || `Micrófono detectado`;
+                        audioSelect.appendChild(opt);
+                    }
+                });
+                alert("¡Equipos detectados correctamente! Abre las listas de 'Fuente de Video' y 'Fuente de Audio' para verlos.");
+            } catch (err) {
+                console.error("Error enumerando:", err);
+                alert("Error crítico leyendo puertos USB.");
+            }
+        }
+
+        window.startCustomCapture = async function() {
+            const quality = document.getElementById('videoQuality').value;
+            let screenConstraints = true;
+
+            if (quality === '720') {
+                screenConstraints = { width: { max: 1280 }, height: { max: 720 }, frameRate: { max: 24 } };
+            } else if (quality === '480') {
+                screenConstraints = { width: { max: 854 }, height: { max: 480 }, frameRate: { max: 24 } };
+            } else {
+                screenConstraints = { width: { max: 1920 }, height: { max: 1080 }, frameRate: { max: 30 } };
+            }
+
+            const vSource = document.getElementById('videoSource').value;
+            const aSource = document.getElementById('audioSource').value;
+
+            try {
+                let finalStream = new MediaStream();
+
+                let vStream;
+                try {
+                    if (vSource === 'screen') {
+                        try {
+                            vStream = await navigator.mediaDevices.getDisplayMedia({ video: screenConstraints, audio: (aSource === 'screen') });
+                        } catch(errScreen) {
+                            if (errScreen.name === 'OverconstrainedError' || errScreen.name === 'TypeError') {
+                                vStream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: false });
+                            } else {
+                                throw errScreen;
+                            }
+                        }
+                    } else {
+                        let camOptions = vSource ? { deviceId: { exact: vSource } } : true;
+                        vStream = await navigator.mediaDevices.getUserMedia({ video: camOptions, audio: false });
+                    }
+                } catch(eVid) {
+                    throw new Error("VIDEO: " + (eVid.name || "Error") + " - " + (eVid.message || "Desconocido"));
+                }
+                vStream.getVideoTracks().forEach(t => {
+                    t.contentHint = 'motion';
+                    finalStream.addTrack(t);
+                });
+
+                const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+                const compressor = audioCtx.createDynamicsCompressor();
+                compressor.threshold.setValueAtTime(-24, audioCtx.currentTime);
+                compressor.knee.setValueAtTime(30, audioCtx.currentTime);
+                compressor.ratio.setValueAtTime(12, audioCtx.currentTime);
+                compressor.attack.setValueAtTime(0.003, audioCtx.currentTime);
+                compressor.release.setValueAtTime(0.25, audioCtx.currentTime);
+                
+                const gainNode = audioCtx.createGain();
+                gainNode.gain.setValueAtTime(1.5, audioCtx.currentTime);
+                
+                const audioDest = audioCtx.createMediaStreamDestination();
+                compressor.connect(gainNode);
+                gainNode.connect(audioDest);
+
+                if (aSource === 'screen') {
+                    if (vSource === 'screen') {
+                        vStream.getAudioTracks().forEach(t => {
+                            const sourceNode = audioCtx.createMediaStreamSource(new MediaStream([t]));
+                            sourceNode.connect(compressor);
+                        });
+                        audioDest.stream.getAudioTracks().forEach(t => finalStream.addTrack(t));
+                    }
+                } else if (aSource !== 'none') {
+                    try {
+                        const aStream = await navigator.mediaDevices.getUserMedia({
+                            audio: { deviceId: { exact: aSource } },
+                            video: false
+                        });
+                        aStream.getAudioTracks().forEach(t => {
+                            const sourceNode = audioCtx.createMediaStreamSource(new MediaStream([t]));
+                            sourceNode.connect(compressor);
+                        });
+                        audioDest.stream.getAudioTracks().forEach(t => finalStream.addTrack(t));
+                    } catch(eAud) {
+                        throw new Error("AUDIO: " + (eAud.name || "Error") + " - " + (eAud.message || "Desconocido"));
+                    }
+                }
+
+                localStream = finalStream;
+                const videoEl = document.getElementById('localVideo');
+                videoEl.srcObject = localStream;
+                videoEl.muted = true;
+                try { await videoEl.play(); } catch(e) {}
+                
+                document.getElementById('noSignal').classList.add('hidden');
+                document.getElementById('btnStartStream').disabled = false;
+                document.getElementById('btnStartStream').classList.remove('opacity-50', 'cursor-not-allowed');
+                document.getElementById('btnStopCapture').disabled = false;
+                document.getElementById('btnStopCapture').classList.remove('opacity-50', 'cursor-not-allowed');
+
+                if (localStream.getAudioTracks().length > 0) {
+                    setupVisualizer(localStream);
+                } else {
+                    for(let i=1; i<=5; i++) {
+                        const v = document.getElementById(`v${i}`);
+                        if(v) v.style.height = '0%';
+                    }
+                }
+
+                localStream.getVideoTracks()[0].onended = () => {
+                    window.stopCapture();
+                };
+            } catch (err) {
+                console.error("Error captura combinada:", err);
+                alert("Fallo al capturar:\n" + err.message);
+            }
+        }
+
+        window.stopCapture = function() {
+            if (localStream) {
+                localStream.getTracks().forEach(track => track.stop());
+                localStream = null;
+            }
+            document.getElementById('localVideo').srcObject = null;
+            document.getElementById('noSignal').classList.remove('hidden');
+            document.getElementById('btnStartStream').disabled = true;
+            document.getElementById('btnStartStream').classList.add('opacity-50', 'cursor-not-allowed');
+            document.getElementById('btnStopCapture').disabled = true;
+            document.getElementById('btnStopCapture').classList.add('opacity-50', 'cursor-not-allowed');
+            
+            if (isStreaming) {
+                window.stopStream();
+            }
+        }
+
+        window.startStream = async function() {
+            if (!masterPeerId) {
+                alert("❌ ERROR CRÍTICO: Tu Mac no pudo conectarse al servidor de videollamadas. Las televisiones ignorarán esta transmisión porque no tienen un ID al cual conectarse.\n\nPor favor RECARGA la página (Cmd + R) e inténtalo de nuevo.");
+                return;
+            }
+            if(confirm("¡ATENCIÓN! Esto interrumpirá la publicidad en TODAS las pantallas de las agencias. ¿Continuar?")) {
+                isStreaming = true;
+                document.getElementById('btnStartStream').classList.add('hidden');
+                document.getElementById('btnStopStream').classList.remove('hidden');
+                document.getElementById('liveBlink').classList.remove('hidden');
+
+                await setDoc(doc(db, 'artifacts', 'broadcast-system', 'platform', 'state'), {
+                    isLive: true,
+                    masterId: masterPeerId,
+                    timestamp: Date.now()
+                });
+            }
+        }
+
+        window.stopStream = async function() {
+            isStreaming = false;
+            document.getElementById('btnStopStream').classList.add('hidden');
+            document.getElementById('btnStartStream').classList.remove('hidden');
+            document.getElementById('liveBlink').classList.add('hidden');
+
+            await setDoc(doc(db, 'artifacts', 'broadcast-system', 'platform', 'state'), {
+                isLive: false,
+                masterId: null,
+                timestamp: Date.now()
+            });
+        }
+
+        window.forceRemoteUpdate = async function() {
+            if(confirm("¿Forzar la actualización y reinicio de TODAS las pantallas?\n\nLas pantallas tardarán unos 10 segundos en reiniciarse.")) {
+                try {
+                    const { doc, setDoc } = await import("https://www.gstatic.com/firebasejs/10.8.1/firebase-firestore.js");
+                    await setDoc(doc(db, "artifacts", "broadcast-system", "commands", "update"), {
+                        action: 'force_restart',
+                        timestamp: Date.now()
+                    });
+                    alert("¡Señal enviada a las agencias!");
+                } catch(e) {
+                    alert("Error: " + e.message);
+                }
+            }
+        }
+
+        async function startAgenciesMonitor() {
+            onSnapshot(collection(db, "artifacts", "broadcast-system", "agencies"), (snapshot) => {
+                let html = '';
+                const now = Date.now();
+                let conectadas = 0;
+                
+                snapshot.forEach(doc => {
+                    const data = doc.data();
+                    const secondsAgo = (now - data.lastPing) / 1000;
+                    
+                    if (secondsAgo < 90) {
+                        conectadas++;
+                        let statusColor = 'text-slate-400';
+                        let dotColor = 'bg-slate-500';
+                        
+                        if (data.status === 'En Vivo') {
+                            statusColor = 'text-emerald-400';
+                            dotColor = 'bg-emerald-500 animate-pulse';
+                        } else if (data.status === 'Intentando Conectar a Mesa') {
+                            statusColor = 'text-yellow-400';
+                            dotColor = 'bg-yellow-500 animate-pulse';
+                        } else {
+                            statusColor = 'text-blue-400';
+                            dotColor = 'bg-blue-500';
+                        }
+                        
+                        html += `
+                            <div class="flex items-center justify-between p-2 bg-slate-800 rounded border border-slate-700">
+                                <div class="flex items-center gap-2">
+                                    <div class="w-2 h-2 rounded-full ${dotColor}"></div>
+                                    <span class="text-slate-200 text-[10px] font-bold uppercase truncate max-w-[120px]">${doc.id}</span>
+                                </div>
+                                <div class="flex flex-col items-end">
+                                    <span class="${statusColor} text-[9px] font-bold uppercase">${data.status}</span>
+                                    <span class="text-slate-500 text-[8px] font-mono">v${data.version || '?'} ${data.peerConnected ? '(Red OK)' : '(Red Fallando)'}</span>
+                                </div>
+                            </div>
+                        `;
+                    }
+                });
+                
+                if (html === '') html = '<p class="text-slate-500 text-xs italic">Ninguna agencia reportando...</p>';
+                document.getElementById('agenciesList').innerHTML = html;
+                document.getElementById('connections-count').textContent = `Agencias Online: ${conectadas}`;
+            });
+        }
+        startAgenciesMonitor();
+
+        function setupVisualizer(stream) {
+            const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+            const source = audioCtx.createMediaStreamSource(stream);
+            const analyser = audioCtx.createAnalyser();
+            analyser.fftSize = 32;
+            source.connect(analyser);
+            const data = new Uint8Array(analyser.frequencyBinCount);
+            function draw() {
+                if(!localStream) return;
+                requestAnimationFrame(draw);
+                analyser.getByteFrequencyData(data);
+                for(let i=1; i<=5; i++) {
+                    const h = (data[i*2] / 255) * 100;
+                    document.getElementById(`v${i}`).style.height = h + '%';
+                }
+            }
+            draw();
+        }
+
+        let bannersList = [];
+        let videosList = [];
+
+        onSnapshot(collection(db, "signage_media"), (snapshot) => {
+            bannersList = [];
+            videosList = [];
+            snapshot.forEach((doc) => {
+                const data = { id: doc.id, ...doc.data() };
+                if (data.type.startsWith('video')) videosList.push(data);
+                else bannersList.push(data);
+            });
+            bannersList.sort((a, b) => a.timestamp - b.timestamp);
+            videosList.sort((a, b) => a.timestamp - b.timestamp);
+            renderPlaylists();
+        });
+
+        window.handleFiles = async function(files) {
+            if (!files.length) return;
+            const bannerDuration = parseInt(document.getElementById('bannerDuration').value) || 10;
+            document.getElementById('uploadProgress').classList.remove('hidden');
+            const bar = document.getElementById('progressBar');
+            const statusText = document.getElementById('uploadStatusText');
+            
+            for (let i = 0; i < files.length; i++) {
+                const file = files[i];
+                bar.style.width = '30%'; 
+                statusText.innerText = "Subiendo " + file.name + "...";
+                try {
+                    const formData = new FormData();
+                    formData.append('file', file);
+                    formData.append('upload_preset', uploadPreset);
+                    const uploadType = file.type.startsWith('video') ? 'video' : 'image';
+                    const cloudRes = await fetch(`https://api.cloudinary.com/v1_1/${cloudName}/${uploadType}/upload`, {
+                        method: 'POST',
+                        body: formData
+                    });
+                    if (!cloudRes.ok) throw new Error("Fallo en Cloudinary");
+                    const cloudData = await cloudRes.json();
+                    const secureUrl = cloudData.secure_url;
+                    bar.style.width = '80%';
+                    statusText.innerText = "Guardando en Firebase...";
+                    const docData = { fileName: file.name, type: uploadType, url: secureUrl, timestamp: Date.now() };
+                    if (uploadType === 'image') docData.durationSecs = bannerDuration;
+                    await addDoc(collection(db, "signage_media"), docData);
+                    bar.style.width = '100%';
+                } catch (e) { console.error("Fallo subida", e); alert("Error subiendo: " + file.name); }
+            }
+            setTimeout(() => {
+                document.getElementById('uploadProgress').classList.add('hidden');
+                bar.style.width = '0%';
+                statusText.innerText = "";
+                document.getElementById('fileInput').value = '';
+            }, 1000);
+        }
+
+        window.deleteItem = async function(docId, fileName) {
+            if(confirm('¿Seguro que deseas eliminar ' + fileName + ' de todas las pantallas?')) {
+                await deleteDoc(doc(db, "signage_media", docId));
+            }
+        };
+
+        function renderPlaylists() {
+            const containerBanners = document.getElementById('bannersContainerList');
+            const containerVideos = document.getElementById('videosContainerList');
+            containerBanners.innerHTML = '';
+            if(bannersList.length === 0) containerBanners.innerHTML = '<p class="text-slate-500 text-center py-6 text-xs">No hay banners</p>';
+            else bannersList.forEach((item) => {
+                const el = document.createElement('div');
+                el.className = 'flex items-center justify-between p-2 bg-slate-800 rounded-xl border border-slate-700 mb-2';
+                el.innerHTML = `<div class="flex items-center gap-3 w-3/4"><div class="h-10 w-16 rounded-md overflow-hidden bg-slate-900 border border-slate-700 shrink-0"><img src="${item.url}" class="h-full w-full object-cover"/></div><div class="truncate"><h3 class="font-bold text-white text-xs truncate">${item.fileName}</h3><p class="text-[9px] text-green-400 uppercase font-black mt-0.5">${item.durationSecs || 10} Segundos</p></div></div><button onclick="deleteItem('${item.id}', '${item.fileName}')" class="p-1.5 text-red-400 hover:bg-red-900/30 rounded-lg transition-colors"><i data-lucide="trash-2" class="w-4 h-4"></i></button>`;
+                containerBanners.appendChild(el);
+            });
+            containerVideos.innerHTML = '';
+            if(videosList.length === 0) containerVideos.innerHTML = '<p class="text-slate-500 text-center py-6 text-xs">No hay videos</p>';
+            else videosList.forEach((item) => {
+                const el = document.createElement('div');
+                el.className = 'flex items-center justify-between p-2 bg-slate-800 rounded-xl border border-slate-700 mb-2';
+                el.innerHTML = `<div class="flex items-center gap-3 w-3/4"><div class="h-10 w-16 rounded-md overflow-hidden bg-slate-900 border border-slate-700 shrink-0"><video src="${item.url}" class="h-full w-full object-cover"></video></div><div class="truncate"><h3 class="font-bold text-white text-xs truncate">${item.fileName}</h3><p class="text-[9px] text-blue-400 uppercase font-black mt-0.5">Video</p></div></div><button onclick="deleteItem('${item.id}', '${item.fileName}')" class="p-1.5 text-red-400 hover:bg-red-900/30 rounded-lg transition-colors"><i data-lucide="trash-2" class="w-4 h-4"></i></button>`;
+                containerVideos.appendChild(el);
+            });
+            lucide.createIcons();
+        }
+
+        let tickerList = [];
+        onSnapshot(collection(db, "signage_ticker"), (snapshot) => {
+            tickerList = [];
+            snapshot.forEach((doc) => { tickerList.push({ id: doc.id, ...doc.data() }); });
+            tickerList.sort((a, b) => a.timestamp - b.timestamp);
+            renderTickers();
+        });
+
+        window.addTicker = async function() {
+            const input = document.getElementById('tickerInput');
+            const text = input.value.trim();
+            if(!text) return;
+            const icons = ['info', 'zap', 'star', 'bell', 'megaphone', 'shield-check', 'building'];
+            const randomIcon = icons[Math.floor(Math.random() * icons.length)];
+            await addDoc(collection(db, "signage_ticker"), { text: text, icon: randomIcon, timestamp: Date.now() });
+            input.value = '';
+        }
+
+        window.deleteTicker = async function(id) {
+            if(confirm("¿Borrar este texto?")) {
+                await deleteDoc(doc(db, "signage_ticker", id));
+            }
+        }
+
+        window.updateSpeed = async function(value) {
+            document.getElementById('speedValue').textContent = value + 's';
+            try {
+                // Actualizamos la velocidad en el estado general
+                await setDoc(doc(db, 'artifacts', 'broadcast-system', 'platform', 'state'), { marqueeSpeed: parseInt(value) }, { merge: true });
+            } catch(e) { console.error("Error updating speed:", e); }
+        }
+
+        function renderTickers() {
+            const container = document.getElementById('tickerContainerList');
+            container.innerHTML = '';
+            if(tickerList.length === 0) container.innerHTML = '<p class="text-slate-500 text-center py-4 text-[9px] font-bold uppercase tracking-widest">No hay textos.</p>';
+            else tickerList.forEach(item => {
+                const el = document.createElement('div');
+                el.className = 'flex items-center justify-between bg-slate-800 p-2.5 rounded-lg border border-slate-700';
+                el.innerHTML = `<div class="flex items-center gap-3 truncate"><i data-lucide="${item.icon}" class="w-4 h-4 text-blue-400 shrink-0"></i><span class="text-white text-xs font-bold truncate">${item.text}</span></div><button onclick="deleteTicker('${item.id}')" class="text-red-400 hover:text-red-300 p-1 shrink-0"><i data-lucide="trash-2" class="w-4 h-4"></i></button>`;
+                container.appendChild(el);
+            });
+            lucide.createIcons();
+        }
+
+        document.addEventListener('DOMContentLoaded', () => {
+            initPeer();
+            const area = document.getElementById('uploadArea');
+            area.addEventListener('dragover', (e) => { e.preventDefault(); area.classList.add('border-green-500', 'bg-green-500/10'); });
+            area.addEventListener('dragleave', () => { area.classList.remove('border-green-500', 'bg-green-500/10'); });
+            area.addEventListener('drop', (e) => {
+                e.preventDefault();
+                area.classList.remove('border-green-500', 'bg-green-500/10');
+                handleFiles(e.dataTransfer.files);
+            });
+            document.getElementById('fileInput').addEventListener('change', (e) => handleFiles(e.target.files));
+        });
+    </script>
+</head>
+<body class="min-h-screen flex flex-col p-6">
+
+    <header class="flex justify-between items-center mb-6 glass rounded-3xl p-6">
+        <div class="flex items-center gap-4">
+            <div class="bg-[#158e45] p-3 rounded-2xl relative">
+                <i data-lucide="radio" class="w-8 h-8 text-white"></i>
+                <div id="liveBlink" class="absolute -top-1 -right-1 w-3 h-3 bg-red-500 rounded-full animate-ping hidden"></div>
+            </div>
+            <div>
+                <h1 class="text-3xl font-900 uppercase tracking-tighter leading-none">Mesa Técnica</h1>
+                <p class="text-green-500 text-sm font-bold uppercase tracking-widest mt-1">Control General de Cartelería</p>
+            </div>
+        </div>
+        <div class="glass px-6 py-2 rounded-2xl border-green-500/30 text-center relative">
+            <p class="text-[10px] text-slate-400 uppercase tracking-widest font-bold">ID Maestro WebRTC</p>
+            <p id="peer-id" class="text-2xl font-black text-green-500 tracking-tighter">Iniciando...</p>
+            <p id="connections-count" class="absolute -bottom-6 left-0 right-0 text-[10px] font-bold text-blue-400 uppercase tracking-widest">Agencias Online: 0</p>
+        </div>
+    </header>
+
+    <main class="flex-1 grid grid-cols-12 gap-6">
+        
+        <div class="col-span-5 flex flex-col gap-4">
+            <div class="glass rounded-3xl p-6 flex flex-col h-full">
+                <h2 class="text-lg font-black uppercase tracking-widest text-white border-b border-slate-700 pb-3 mb-4 flex items-center gap-2">
+                    <i data-lucide="video" class="text-green-500"></i> Transmisión WebRTC
+                </h2>
+                
+                <div class="relative flex-1 bg-black rounded-2xl overflow-hidden border-2 border-slate-700 shadow-xl flex items-center justify-center min-h-[300px]">
+                    <video id="localVideo" class="w-full h-full object-contain" autoplay muted playsinline></video>
+                    <div id="noSignal" class="absolute inset-0 flex flex-col items-center justify-center text-slate-500 bg-slate-900/50">
+                        <i data-lucide="video-off" class="w-12 h-12 mb-3 opacity-30"></i>
+                        <p class="font-bold uppercase tracking-widest opacity-50 text-xs">Sin Señal</p>
+                    </div>
+                </div>
+
+                <div class="col-span-2 border-t border-slate-700 pt-4 mt-2">
+                    <div class="flex justify-between items-center mb-3">
+                        <label class="text-[10px] font-black uppercase tracking-widest text-slate-400">
+                            <i data-lucide="sliders" class="inline w-3 h-3 mb-0.5"></i> Orígenes de AV
+                        </label>
+                        <button onclick="loadDevices()" class="bg-blue-600 hover:bg-blue-500 text-white px-3 py-1.5 rounded text-[9px] font-black uppercase tracking-widest flex items-center gap-1 transition-colors">
+                            <i data-lucide="search" class="w-3 h-3"></i> 1. Detectar Equipos
+                        </button>
+                    </div>
+                    
+                    <div class="grid grid-cols-2 gap-3 mb-4">
+                        <div>
+                            <label class="block text-[9px] font-bold text-slate-500 mb-1 uppercase tracking-widest">Fuente de Video</label>
+                            <select id="videoSource" class="w-full bg-slate-900 text-white font-bold text-[10px] rounded border border-slate-700 p-2 outline-none focus:border-blue-500">
+                                <option value="screen">Pantalla / Ventana OBS</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label class="block text-[9px] font-bold text-slate-500 mb-1 uppercase tracking-widest">Fuente de Audio</label>
+                            <select id="audioSource" class="w-full bg-slate-900 text-white font-bold text-[10px] rounded border border-slate-700 p-2 outline-none focus:border-blue-500">
+                                <option value="screen">Igual que el Video</option>
+                                <option value="none">Sin Audio</option>
+                            </select>
+                        </div>
+                    </div>
+
+                    <div class="mb-4">
+                        <label class="block text-[9px] font-bold text-slate-500 mb-1 uppercase tracking-widest">Calidad de Video</label>
+                        <select id="videoQuality" class="w-full bg-slate-900 text-white font-bold text-[10px] rounded border border-slate-700 p-2 outline-none focus:border-blue-500">
+                            <option value="1080">1080p a 30fps (Alta Calidad)</option>
+                            <option value="720" selected>720p a 24fps (Recomendado)</option>
+                            <option value="480">480p a 24fps (Ahorro Máximo)</option>
+                        </select>
+                    </div>
+
+                    <button onclick="startCustomCapture()" class="w-full bg-slate-700 hover:bg-slate-600 p-3 rounded-xl flex items-center justify-center gap-2 transition-all font-black uppercase text-[11px] tracking-wider shadow-lg text-white mb-2">
+                        <i data-lucide="power" class="w-4 h-4"></i> 2. Capturar Seleccionados
+                    </button>
+                </div>
+
+                <div class="flex gap-4">
+                    <button id="btnStartStream" onclick="window.startStream()" disabled class="w-full bg-emerald-600 hover:bg-emerald-500 text-white font-bold py-3 rounded tracking-widest text-[11px] uppercase transition-all shadow-[0_0_15px_rgba(5,150,105,0.4)] opacity-50 cursor-not-allowed">
+                        2. Iniciar Transmisión
+                    </button>
+                    <button id="btnStopStream" onclick="window.stopStream()" class="hidden w-full bg-red-600 hover:bg-red-500 text-white font-bold py-3 rounded tracking-widest text-[11px] uppercase transition-all shadow-[0_0_15px_rgba(220,38,38,0.4)]">
+                        3. Detener Transmisión
+                    </button>
+                    <button id="btnStopCapture" onclick="window.stopCapture()" disabled class="w-full bg-red-600 hover:bg-red-500 text-white font-bold py-3 rounded tracking-widest text-[11px] uppercase transition-all shadow-[0_0_15px_rgba(220,38,38,0.4)] opacity-50 cursor-not-allowed">
+                        3. Detener Captura
+                    </button>
+                </div>
+
+                <div class="mt-4 pt-4 border-t border-slate-800">
+                    <button onclick="window.forceRemoteUpdate()" class="w-full bg-indigo-600 hover:bg-indigo-500 text-white font-bold py-2 rounded tracking-widest text-[10px] uppercase transition-all shadow-[0_0_15px_rgba(79,70,229,0.4)] flex items-center justify-center gap-2">
+                        <i data-lucide="refresh-cw" class="w-3 h-3"></i> Forzar Actualización y Reinicio en Agencias
+                    </button>
+                </div>
+
+                <div class="mt-8 bg-slate-900 p-4 rounded-xl border border-slate-700">
+                    <h3 class="text-white font-bold text-[10px] uppercase mb-4 flex items-center gap-2"><i data-lucide="activity" class="w-4 h-4 text-emerald-400"></i> Monitor de Agencias en Tiempo Real</h3>
+                    <div id="agenciesList" class="flex flex-col gap-2 max-h-[300px] overflow-y-auto pr-2 custom-scrollbar">
+                        <p class="text-slate-500 text-xs italic">Esperando latidos...</p>
+                    </div>
+                </div>
+
+                <div class="h-10 mt-4 border border-slate-700 rounded-lg p-2 bg-slate-900">
+                    <div class="flex justify-between items-end h-full px-2 gap-1">
+                        <div class="flex-1 bg-green-500/20 rounded-t-sm relative overflow-hidden"><div id="v1" class="absolute bottom-0 w-full bg-green-500 vumeter-bar" style="height: 0%"></div></div>
+                        <div class="flex-1 bg-green-500/20 rounded-t-sm relative overflow-hidden"><div id="v2" class="absolute bottom-0 w-full bg-green-500 vumeter-bar" style="height: 0%"></div></div>
+                        <div class="flex-1 bg-green-500/20 rounded-t-sm relative overflow-hidden"><div id="v3" class="absolute bottom-0 w-full bg-green-500 vumeter-bar" style="height: 0%"></div></div>
+                        <div class="flex-1 bg-green-500/20 rounded-t-sm relative overflow-hidden"><div id="v4" class="absolute bottom-0 w-full bg-yellow-500 vumeter-bar" style="height: 0%"></div></div>
+                        <div class="flex-1 bg-green-500/20 rounded-t-sm relative overflow-hidden"><div id="v5" class="absolute bottom-0 w-full bg-red-500 vumeter-bar" style="height: 0%"></div></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- =====================================
+             APARTADO 2: CARGA DE CONTENIDO (DERECHA)
+             ===================================== -->
+        <div class="col-span-7 flex flex-col gap-4">
+            <div class="glass rounded-3xl p-6 flex flex-col h-full">
+                
+                <h2 class="text-lg font-black uppercase tracking-widest text-white border-b border-slate-700 pb-3 mb-4 flex items-center gap-2">
+                    <i data-lucide="cloud-upload" class="text-blue-500"></i> Carga de Contenido
+                </h2>
+                
+                <!-- UPLOADER Y CONFIGURACIÓN -->
+                <div class="bg-slate-800/50 border border-slate-700 rounded-2xl p-4 mb-6 flex items-center gap-6">
+                    
+                    <!-- Uploader Area -->
+                    <div id="uploadArea" class="flex-1 border-2 border-dashed border-slate-500 rounded-xl p-6 text-center transition-colors hover:bg-white/5 relative overflow-hidden">
+                        <i data-lucide="upload-cloud" class="w-8 h-8 mx-auto text-slate-400 mb-2"></i>
+                        <p class="text-white font-bold text-xs uppercase tracking-wide mb-3">Arrastra Imágenes o Videos</p>
+                        <label class="bg-blue-600 hover:bg-blue-500 text-white px-5 py-2 rounded-lg font-bold cursor-pointer transition-colors text-[10px] uppercase tracking-widest">
+                            Examinar
+                            <input type="file" id="fileInput" multiple accept="image/*,video/*" class="hidden">
+                        </label>
+                        
+                        <div id="uploadProgress" class="hidden absolute bottom-0 left-0 right-0 h-2 bg-slate-900">
+                            <div id="progressBar" class="h-full bg-blue-500 w-0 transition-all duration-300"></div>
+                            <span id="uploadStatusText" class="absolute inset-0 text-[8px] font-bold text-white leading-2 flex items-center justify-center drop-shadow-md"></span>
+                        </div>
+                    </div>
+
+                    <!-- Configuración -->
+                    <div class="w-48 bg-slate-900 rounded-xl p-4 border border-slate-700">
+                        <label class="block text-[10px] font-black uppercase tracking-widest text-slate-400 mb-2">
+                            <i data-lucide="timer" class="inline w-3 h-3 mb-0.5"></i> Duración (Banners)
+                        </label>
+                        <div class="flex items-center gap-2">
+                            <input type="number" id="bannerDuration" value="10" min="1" class="w-full bg-slate-800 text-white font-bold text-lg rounded-lg border border-slate-600 p-2 text-center outline-none focus:border-blue-500">
+                            <span class="text-xs text-slate-500 font-bold">Seg</span>
+                        </div>
+                        <p class="text-[9px] text-slate-500 mt-2 leading-tight">Aplica a las imágenes que subas en este momento.</p>
+                    </div>
+
+                </div>
+
+                <!-- LISTAS SEPARADAS -->
+                <div class="flex-1 grid grid-cols-2 gap-6 min-h-[200px]">
+                    <!-- Banners -->
+                    <div class="flex flex-col">
+                        <h3 class="text-xs font-black uppercase tracking-widest text-slate-400 mb-3 bg-slate-800/50 py-2 px-3 rounded-lg border border-slate-700 flex justify-between">
+                            <span>Banners (Izquierda)</span>
+                            <i data-lucide="image" class="w-4 h-4 text-slate-500"></i>
+                        </h3>
+                        <div id="bannersContainerList" class="flex-1 overflow-y-auto pr-2 space-y-2">
+                            <p class="text-slate-500 text-center py-6 text-xs animate-pulse">Cargando...</p>
+                        </div>
+                    </div>
+
+                    <!-- Videos -->
+                    <div class="flex flex-col">
+                        <h3 class="text-xs font-black uppercase tracking-widest text-slate-400 mb-3 bg-slate-800/50 py-2 px-3 rounded-lg border border-slate-700 flex justify-between">
+                            <span>Videos (Derecha)</span>
+                            <i data-lucide="film" class="w-4 h-4 text-slate-500"></i>
+                        </h3>
+                        <div id="videosContainerList" class="flex-1 overflow-y-auto pr-2 space-y-2">
+                            <p class="text-slate-500 text-center py-6 text-xs animate-pulse">Cargando...</p>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- CONTROL DE TEXTOS (TICKER) -->
+                <div class="mt-6 border-t border-slate-700 pt-6">
+                    <h3 class="text-xs font-black uppercase tracking-widest text-slate-400 mb-3 flex items-center gap-2">
+                        <i data-lucide="message-square" class="w-4 h-4 text-blue-500"></i> Textos Pasantes (Marquesina Inferior)
+                    </h3>
+                    <div class="flex gap-3 mb-4">
+                        <input type="text" id="tickerInput" placeholder="Ej: ¡Nuevas Tasas de Interés en MICOOPE!" class="flex-1 bg-slate-900 text-white border border-slate-700 rounded-lg p-3 outline-none focus:border-blue-500 text-xs font-bold">
+                        <button onclick="addTicker()" class="bg-blue-600 hover:bg-blue-500 text-white px-4 rounded-lg font-black uppercase tracking-widest text-[10px] transition-colors shadow-lg">
+                            Añadir Texto
+                        </button>
+                    </div>
+                    
+                    <!-- CONTROL DE VELOCIDAD -->
+                    <div class="flex items-center gap-4 mb-4 bg-slate-900/50 p-3 rounded-lg border border-slate-700/50">
+                        <span class="text-[10px] text-slate-400 uppercase tracking-widest font-bold whitespace-nowrap"><i data-lucide="gauge" class="w-3 h-3 inline pb-0.5"></i> Velocidad:</span>
+                        <input type="range" id="speedSlider" min="10" max="80" value="40" class="flex-1 accent-blue-500" onchange="window.updateSpeed(this.value)">
+                        <span id="speedValue" class="text-xs font-black text-blue-400 w-10 text-right">40s</span>
+                    </div>
+                    <div id="tickerContainerList" class="flex flex-col gap-2 max-h-[120px] overflow-y-auto pr-2">
+                        <p class="text-slate-500 text-center py-4 text-xs animate-pulse">Cargando textos...</p>
+                    </div>
+                </div>
+
+            </div>
+        </div>
+
+    </main>
+    <script>
+        // Sincronizar el slider de velocidad con la base de datos al cargar
+        import("https://www.gstatic.com/firebasejs/10.8.1/firebase-firestore.js").then(({ getFirestore, doc, onSnapshot }) => {
+            const db = getFirestore();
+            onSnapshot(doc(db, 'artifacts', 'broadcast-system', 'platform', 'state'), (docSnap) => {
+                if(docSnap.exists()) {
+                    const state = docSnap.data();
+                    if(state.marqueeSpeed) {
+                        const slider = document.getElementById('speedSlider');
+                        const label = document.getElementById('speedValue');
+                        if(slider && label && document.activeElement !== slider) {
+                            slider.value = state.marqueeSpeed;
+                            label.textContent = state.marqueeSpeed + 's';
+                        }
+                    }
+                }
+            });
+        });
+    </script>
+</body>
+</html>

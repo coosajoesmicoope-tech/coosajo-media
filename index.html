@@ -1,0 +1,261 @@
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    
+    <!-- Meta Tags para Modo Kiosko Nativo -->
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    
+    <title>COOSAJO 4K Signage (USB Offline)</title>
+    
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/lucide@latest"></script>
+    
+    <style>
+        @keyframes scroll-left { 
+            0% { transform: translate3d(100vw, 0, 0); } 
+            100% { transform: translate3d(-100%, 0, 0); } 
+        }
+        .animate-marquee { 
+            animation: scroll-left 35s linear infinite; 
+            will-change: transform;
+        }
+
+        /* Efecto LiquidGlass 6px para 4K */
+        @keyframes liquid-glow {
+            0%, 100% { box-shadow: inset 0 0 40px rgba(21, 142, 69, 0.6), 0 0 30px rgba(21, 142, 69, 0.3); border-color: rgba(21, 142, 69, 0.4); }
+            50% { box-shadow: inset 0 0 60px rgba(23, 46, 89, 0.7), 0 0 50px rgba(23, 46, 89, 0.5); border-color: rgba(23, 46, 89, 0.5); }
+        }
+
+        .liquid-border {
+            position: absolute;
+            inset: 0;
+            z-index: 100;
+            pointer-events: none;
+            border: 6px solid transparent;
+            animation: liquid-glow 5s ease-in-out infinite;
+            mix-blend-mode: screen;
+            will-change: box-shadow;
+        }
+
+        body { 
+            overflow: hidden; 
+            touch-action: none; 
+            background-color: #000; 
+            height: 100dvh;
+            margin: 0;
+            padding: 0;
+            font-family: 'Inter', sans-serif;
+            cursor: none !important;
+        }
+        
+        .media-container {
+            position: relative;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            overflow: hidden;
+            background: transparent;
+        }
+
+        .media-item {
+            position: absolute;
+            width: 100%;
+            height: 100%;
+            transition: opacity 1s ease-in-out;
+            object-fit: contain;
+        }
+
+        .image-mode { object-fit: cover !important; }
+        .video-mode { object-fit: contain !important; }
+
+        .setup-btn {
+            background: linear-gradient(135deg, #158e45 0%, #172e59 100%);
+            cursor: pointer !important;
+        }
+    </style>
+</head>
+<body class="relative w-full flex flex-col">
+    
+    <div class="liquid-border"></div>
+    <div class="absolute inset-0 z-0 bg-cover bg-center opacity-40" style="background-image: url('abstract-white-background-with-elegant-curving-lin-2026-01-07-23-20-12-utc.jpg')"></div>
+
+    <!-- HEADER: Logo, Reloj y Clima -->
+    <header class="relative z-30 bg-white/95 backdrop-blur-md shadow-lg flex items-center justify-between px-10 py-6 border-b-8 border-[#158e45] shrink-0">
+        <img src="LOGO COOSAJO SIN ESLOGAN.png" alt="Logo" class="h-16 w-auto object-contain" />
+        <div class="flex items-center gap-6 bg-slate-100/50 px-6 py-3 rounded-2xl border border-slate-200">
+            <div id="weatherIconContainer"><i data-lucide="cloud-sun" class="w-8 h-8 text-[#172e59]"></i></div>
+            <span id="weatherTemp" class="font-black text-2xl text-[#172e59]">--°C</span>
+            <div class="h-8 w-px bg-slate-300"></div>
+            <span id="clockTime" class="font-black text-3xl text-[#172e59]">--:--</span>
+        </div>
+    </header>
+
+    <main class="relative z-10 flex-1 w-full min-h-0 flex flex-col overflow-hidden">
+        
+        <!-- Overlay de Configuración Mejorado -->
+        <div id="setupOverlay" class="absolute inset-0 z-50 bg-[#172e59]/98 backdrop-blur-2xl flex flex-col items-center justify-center p-12 text-center" style="cursor: default !important;">
+            <img src="LOGO COOSAJO SIN ESLOGAN.png" class="h-24 mb-12 brightness-200" />
+            
+            <div id="step1" class="flex flex-col items-center">
+                <div class="w-32 h-32 bg-white/10 rounded-full flex items-center justify-center mb-10 border border-white/20 animate-pulse">
+                    <i data-lucide="folder-open" class="w-16 h-16 text-white"></i>
+                </div>
+                <h2 class="text-white text-4xl font-bold mb-4 tracking-tight uppercase">Panel 4K COOSAJO</h2>
+                <p class="text-blue-200 mb-12 text-sm uppercase tracking-[0.4em] font-medium">Digital Signage Vertical (47")</p>
+                
+                <label for="fileInput" class="setup-btn text-white px-16 py-8 rounded-3xl font-bold text-2xl shadow-2xl active:scale-95 transition-all uppercase tracking-widest border border-white/20">
+                    Cargar Contenido USB
+                </label>
+                <input type="file" id="fileInput" accept="video/*,image/*" multiple class="hidden">
+            </div>
+
+            <div id="step2" class="hidden flex flex-col items-center">
+                <div class="w-32 h-32 bg-green-500/20 rounded-full flex items-center justify-center mb-10 border border-green-500/40 animate-bounce">
+                    <i data-lucide="play" class="w-16 h-16 text-green-400 fill-current"></i>
+                </div>
+                <h2 class="text-white text-4xl font-bold mb-4 tracking-tight uppercase">¡Todo listo!</h2>
+                <p class="text-green-300 mb-12 text-sm uppercase tracking-[0.2em] font-medium">Pulsa para activar pantalla completa y audio</p>
+                
+                <button id="startBtn" class="bg-green-600 text-white px-20 py-10 rounded-3xl font-black text-3xl shadow-[0_0_50px_rgba(21,142,69,0.5)] active:scale-95 transition-all uppercase tracking-widest border-4 border-green-400 cursor-pointer !important;">
+                    INICIAR TRANSMISIÓN 4K
+                </button>
+            </div>
+        </div>
+
+        <div class="media-container flex-1">
+            <video id="mainVideo" class="media-item video-mode opacity-0 z-20" playsinline webkit-playsinline></video>
+            <img id="mainBanner" src="" class="media-item image-mode opacity-0 z-10" alt="COOSAJO" />
+
+            <div class="absolute top-8 left-8 z-40 bg-black/40 backdrop-blur-md rounded-2xl px-6 py-3 flex items-center gap-4 border border-white/10">
+                <div class="w-4 h-4 bg-green-500 rounded-full animate-pulse shadow-[0_0_15px_#22c55e]"></div>
+                <span id="mediaTypeLabel" class="text-white text-sm font-black uppercase tracking-widest">En Pantalla</span>
+            </div>
+        </div>
+
+        <!-- Redes Sociales Compactas -->
+        <div class="bg-white/90 backdrop-blur-md py-4 px-10 flex justify-around border-t border-slate-200 shrink-0 relative z-30">
+            <div class="flex items-center gap-4">
+                <img src="LOGO FACEBOOK.png" class="w-8 h-8 object-contain" onerror="this.style.display='none'" />
+                <span class="text-xl font-black text-[#172e59]">COOSAJO</span>
+            </div>
+            <div class="flex items-center gap-4">
+                <img src="LOGO INSTA.png" class="w-8 h-8 object-contain" onerror="this.style.display='none'" />
+                <span class="text-xl font-black text-[#172e59]">@coosajo</span>
+            </div>
+            <div class="flex items-center gap-4">
+                <i data-lucide="globe" class="w-7 h-7 text-[#172e59]"></i>
+                <span class="text-xl font-black text-[#172e59]">coosajo.com</span>
+            </div>
+        </div>
+    </main>
+
+    <footer class="relative z-30 h-24 bg-[#172e59] text-white flex items-center overflow-hidden shrink-0 shadow-[0_-15px_30px_rgba(0,0,0,0.3)]">
+        <div class="absolute left-0 top-0 bottom-0 z-40 bg-[#158e45] flex items-center px-8 shadow-2xl">
+            <i data-lucide="info" class="w-10 h-10 text-white"></i>
+        </div>
+
+        <div class="whitespace-nowrap animate-marquee flex items-center gap-20 text-3xl font-bold ml-28">
+            <span>✨ ¡Ahorrar tiene premio! Por cada depósito de <strong class="text-yellow-400 font-black text-5xl underline decoration-green-500">Q50</strong> en tu Magicuenta, llevate tus estampitas.</span>
+            <span class="text-[#158e45] font-black">•</span>
+            <span>📖 Llenar el álbum es más fácil ahorrando. ¡Ven por tus estampitas con tu Magicuenta!</span>
+            <span class="text-[#158e45] font-black">•</span>
+            <span>👨‍👩‍👦 Incentiva su ahorro y completen el álbum juntos. ¡Pide tus estampitas!</span>
+        </div>
+    </footer>
+
+    <script>
+        lucide.createIcons();
+
+        function updateClock() {
+            const now = new Date();
+            document.getElementById('clockTime').textContent = now.toLocaleTimeString('es-GT', { hour: '2-digit', minute: '2-digit', hour12: true });
+        }
+        setInterval(updateClock, 1000); updateClock();
+
+        async function fetchWeather() {
+            try {
+                const res = await fetch('https://api.open-meteo.com/v1/forecast?latitude=14.5667&longitude=-89.35&current=temperature_2m');
+                const data = await res.json();
+                document.getElementById('weatherTemp').textContent = `${Math.round(data.current.temperature_2m)}°C`;
+            } catch (e) { console.error("Clima no disponible"); }
+        }
+        fetchWeather(); setInterval(fetchWeather, 900000);
+
+        const fileInput = document.getElementById('fileInput');
+        const setupOverlay = document.getElementById('setupOverlay');
+        const startBtn = document.getElementById('startBtn');
+        const step1 = document.getElementById('step1');
+        const step2 = document.getElementById('step2');
+        
+        const videoElement = document.getElementById('mainVideo');
+        const bannerElement = document.getElementById('mainBanner');
+        const typeLabel = document.getElementById('mediaTypeLabel');
+
+        let playlist = [];
+        let currentIndex = 0;
+
+        fileInput.addEventListener('change', (e) => {
+            const files = Array.from(e.target.files);
+            if (files.length > 0) {
+                playlist = files;
+                step1.classList.add('hidden');
+                step2.classList.remove('hidden');
+            }
+        });
+
+        startBtn.addEventListener('click', () => {
+            const de = document.documentElement;
+            if (de.requestFullscreen) de.requestFullscreen();
+            else if (de.webkitRequestFullscreen) de.webkitRequestFullscreen();
+            else if (de.msRequestFullscreen) de.msRequestFullscreen();
+            
+            setupOverlay.classList.add('hidden');
+            playNext();
+        });
+
+        function playNext() {
+            if(playlist.length === 0) return;
+            
+            const file = playlist[currentIndex];
+            const isVideo = file.type.startsWith('video/');
+            const url = URL.createObjectURL(file);
+
+            if (isVideo) {
+                typeLabel.textContent = "Video Institucional";
+                bannerElement.style.opacity = "0";
+                
+                videoElement.src = url;
+                videoElement.style.opacity = "1";
+                videoElement.volume = 1.0; 
+                
+                videoElement.play().catch(() => {
+                    videoElement.muted = true;
+                    videoElement.play();
+                });
+
+                videoElement.onended = () => {
+                    URL.revokeObjectURL(url);
+                    currentIndex = (currentIndex + 1) % playlist.length;
+                    playNext();
+                };
+            } else {
+                typeLabel.textContent = "Banner Promocional";
+                videoElement.style.opacity = "0";
+                videoElement.pause();
+                
+                bannerElement.src = url;
+                bannerElement.style.opacity = "1";
+                
+                setTimeout(() => {
+                    URL.revokeObjectURL(url);
+                    currentIndex = (currentIndex + 1) % playlist.length;
+                    playNext();
+                }, 10000); 
+            }
+        }
+    </script>
+</body>
+</html>

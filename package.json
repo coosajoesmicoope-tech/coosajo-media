@@ -1,0 +1,62 @@
+{
+  "name": "coosajo-signage-live",
+  "version": "1.0.25",
+  "description": "App de Transmision en Vivo y Carteleria COOSAJO",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "build:win": "electron-builder --win",
+    "build:mac": "electron-builder --mac",
+    "subir:actualizacion": "node script_subir.js"
+  },
+  "author": "COOSAJO",
+  "license": "ISC",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/coosajoesmicoope-tech/coosajo-media.git"
+  },
+  "devDependencies": {
+    "dotenv": "^17.4.2",
+    "electron": "^29.1.0",
+    "electron-builder": "^24.13.3"
+  },
+  "build": {
+    "appId": "com.coosajo.signagelive.v10",
+    "productName": "COOSAJO 4K",
+    "asar": true,
+    "compression": "maximum",
+    "files": [
+      "**/*",
+      "!node_modules/electron/**/*",
+      "!node_modules/electron-builder/**/*",
+      "!dist/**/*",
+      "!.git/**/*",
+      "!public/updates/**/*"
+    ],
+    "directories": {
+      "output": "dist"
+    },
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "coosajoesmicoope-tech",
+        "repo": "coosajo-media",
+        "releaseType": "release"
+      }
+    ],
+    "win": {
+      "target": "nsis"
+    },
+    "nsis": {
+      "oneClick": true,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": false,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "COOSAJO 4K"
+    }
+  },
+  "dependencies": {
+    "electron-updater": "^6.8.9"
+  }
+}

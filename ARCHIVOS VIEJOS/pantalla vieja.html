@@ -1,0 +1,202 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Pantalla Agencia COOSAJO</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;900&display=swap');
+
+        body { 
+            font-family: 'Inter', sans-serif; 
+            overflow: hidden; 
+            background-color: #f1f5f9; 
+            margin: 0; 
+            cursor: none; 
+        }
+
+        .bg-abstract { 
+            background-image: url('abstract-white-background-with-elegant-curving-lin-2026-01-07-23-20-12-utc.jpg'); 
+            background-size: cover; 
+            background-position: center; 
+            opacity: 0.6; 
+            position: absolute; 
+            inset: 0; 
+            z-index: 0; 
+        }
+
+        @keyframes scroll-left { 0% { transform: translateX(100vw); } 100% { transform: translateX(-100%); } }
+        .animate-marquee { animation: scroll-left 45s linear infinite; }
+
+        @keyframes progress-fill { 0% { width: 0%; } 100% { width: 100%; } }
+        .animate-progress { animation: progress-fill 8s linear infinite; }
+
+        .video-frame { 
+            border: 12px solid #ffffff; 
+            border-radius: 2.5rem; 
+            box-shadow: 0 25px 50px -12px rgba(0,0,0,0.25); 
+            background: #000; 
+        }
+
+        #sidebar { 
+            transition: all 0.8s cubic-bezier(0.4, 0, 0.2, 1); 
+            width: 431px; 
+            border-width: 12px; /* Se declara para poder animarlo */
+        }
+        #sidebar.hidden-sidebar { 
+            width: 0; 
+            opacity: 0; 
+            margin-right: -1.5rem; 
+            transform: translateX(-40px); 
+            border-width: 0; /* Elimina el borde blanco para dar pantalla completa al video */
+            padding: 0;
+        }
+
+        .status-badge {
+@@ -108,7 +111,7 @@
+
+        <!-- Área Central -->
+        <div class="flex-1 min-w-0 h-full relative overflow-hidden video-frame flex items-center justify-center bg-black">
+            <video id="liveVideo" class="absolute inset-0 w-full h-full object-contain z-10 opacity-0 transition-opacity duration-1000" autoplay playsinline></video>
+            <video id="liveVideo" class="absolute inset-0 w-full h-full object-contain z-10 opacity-0 transition-opacity duration-1000" autoplay muted playsinline></video>
+
+            <!-- Overlay de Espera -->
+            <div id="waitingUI" class="absolute inset-0 z-20 flex flex-col items-center justify-center bg-slate-900/40">
+@@ -162,15 +165,35 @@
+        // Creamos un Peer con ID dinámico para la agencia
+        const peer = new Peer('AGENCIA-' + Math.floor(Math.random() * 10000));
+        let activeCall = null;
+        const MASTER_ID = 'COOSAJO-MASTER-MAGIC';
+
+        // Escuchar Firebase en tiempo real
+        // 1. AVISAR A LA MESA TÉCNICA (Si usas envío directo P2P)
+        peer.on('open', (id) => {
+            console.log("ID Agencia:", id);
+            const conn = peer.connect(MASTER_ID);
+            conn.on('open', () => console.log("Conectado por datos a la Mesa Técnica."));
+            conn.on('data', (data) => {
+                if(data === 'STOP_SIGNAL') desconectarVideo();
+            });
+        });
+
+        // 2. RECIBIR VIDEO DIRECTO (Si la Mesa Técnica te empuja la señal)
+        peer.on('call', (call) => {
+            console.log("Recibiendo señal directa de la Mesa Técnica...");
+            call.answer(); 
+            activeCall = call;
+            call.on('stream', mostrarVideo);
+            call.on('close', desconectarVideo);
+        });
+
+        // 3. ESCUCHAR FIREBASE (Sincronización en la nube)
+        onSnapshot(doc(db, "coosajo_system", "broadcast_state"), (docSnapshot) => {
+            if (docSnapshot.exists()) {
+                const state = docSnapshot.data();
+
+                if (state.isLive === true) {
+                    netStatus.textContent = "Señal detectada. Vinculando video...";
+                    conectarVideo(state.masterId);
+                    if (!activeCall) conectarVideo(state.masterId || MASTER_ID);
+                } else {
+                    desconectarVideo();
+                }
+@@ -183,24 +206,28 @@
+
+        function conectarVideo(masterId) {
+            console.log("Llamando a la Mesa Técnica:", masterId);
+            
+            // Hacemos una llamada P2P a la Mesa Técnica
+            activeCall = peer.call(masterId, new MediaStream()); 
+            
+            activeCall.on('stream', (stream) => {
+                console.log("Video recibido.");
+                liveVideo.srcObject = stream;
+                liveVideo.onloadedmetadata = () => {
+                    liveVideo.play().catch(e => console.log("Clickea la pantalla para audio"));
+                    liveVideo.style.opacity = "1";
+                    waitingUI.classList.add('hidden');
+                    sidebar.classList.add('hidden-sidebar');
+                };
+            });
+            try {
+                activeCall = peer.call(masterId, new MediaStream()); 
+                activeCall.on('stream', mostrarVideo);
+                activeCall.on('close', desconectarVideo);
+            } catch(e) {
+                console.error("Error al llamar:", e);
+            }
+        }
+
+            activeCall.on('close', () => {
+                desconectarVideo();
+            });
+        // 4. MOSTRAR VIDEO Y ESCONDER LATERAL
+        function mostrarVideo(stream) {
+            console.log("Video recibido. Expandiendo a pantalla completa...");
+            liveVideo.srcObject = stream;
+            liveVideo.onloadedmetadata = () => {
+                // Al llegar la señal, ocultamos el sidebar para que el video crezca
+                sidebar.classList.add('hidden-sidebar');
+                waitingUI.classList.add('hidden');
+                liveVideo.style.opacity = "1";
+
+                // El video empieza muteado (por reglas del navegador). Clickea para oír.
+                liveVideo.play().catch(e => console.log("Clickea la pantalla para habilitar sonido"));
+            };
+        }
+
+        function desconectarVideo() {
+@@ -211,19 +238,22 @@
+            liveVideo.srcObject = null;
+            liveVideo.style.opacity = "0";
+            waitingUI.classList.remove('hidden');
+            
+            // Regresamos el sidebar a la vista cuando se apaga la transmisión
+            sidebar.classList.remove('hidden-sidebar');
+            
+            netStatus.textContent = "Conectado a Firebase - En Espera";
+            netStatus.className = "text-[#158e45] font-bold text-xs uppercase tracking-widest animate-pulse";
+        }
+
+        // Reloj de pantalla
+        // Reloj de pantalla (Corregido)
+        setInterval(() => {
+            const now = new Date();
+            document.getElementById('clockTime').textContent = now.toLocaleTimeString('es-GT', {hour:'2-digit', minute:'2-digit', hour12: true});
+            document.getElementById('clockDate').textContent = now.toLocaleDateString('es-GT', {weekday:'long', day:'numeric', month:'long'}).toUpperCase();
+        }, 1000);
+
+        // Banners Visuales (8 banners de 8 seg)
+        // Lógica de los Banners rotativos
+        function initBanners() {
+            const container = document.getElementById('bannersContainer');
+            const progress = document.getElementById('progressContainer');
+@@ -245,22 +275,25 @@
+                document.getElementById(`b-${cur}`).style.opacity = 0;
+                document.getElementById(`b-${cur}`).style.zIndex = 0;
+                document.getElementById(`p-${cur}`).className = "h-full bg-[#158e45] w-full opacity-100";
+                
+                cur = cur % 8 + 1;
+                
+                document.getElementById(`b-${cur}`).style.opacity = 1;
+                document.getElementById(`b-${cur}`).style.zIndex = 10;
+                document.getElementById(`p-${cur}`).className = "h-full bg-[#158e45] w-full animate-progress";
+                
+                if(cur === 1) {
+                    for(let i=2; i<=8; i++) document.getElementById(`p-${i}`).className = "h-full bg-[#158e45] w-full opacity-0";
+                }
+            }, 8000);
+        }
+
+        window.enableAudio = () => { 
+            liveVideo.muted = false; 
+            if(liveVideo.srcObject) liveVideo.play().catch(()=>{}); 
+        };
+
+        initBanners();
+    </script>
+</body>
+</html>
