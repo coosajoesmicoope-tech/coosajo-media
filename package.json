@@ -1,6 +1,6 @@
 {
   "name": "coosajo-signage-live",
-  "version": "1.0.43",
+  "version": "1.0.44",
   "description": "App de Transmision en Vivo y Carteleria COOSAJO",
   "main": "main.js",
   "scripts": {
@@ -20,7 +20,7 @@
     "electron-builder": "^24.13.3"
   },
   "build": {
-    "appId": "com.coosajo.signagelive.v24",
+    "appId": "com.coosajo.signagelive.v25",
     "productName": "COOSAJO 4K",
     "asar": true,
     "compression": "maximum",

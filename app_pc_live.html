@@ -19,7 +19,7 @@
             box-shadow: 0 15px 35px rgba(0,0,0,0.15);
             overflow: hidden;
         }
-        #sidebar { transition: all 0.8s cubic-bezier(0.4, 0, 0.2, 1); width: 30%; }
+        #sidebar { transition: all 0.8s cubic-bezier(0.4, 0, 0.2, 1); }
         #sidebar.hidden-sidebar { width: 0; opacity: 0; margin-right: -1.25rem; transform: translateX(-40px); }
         #mainFooter.hidden-footer { height: 0; border-width: 0; opacity: 0; margin: 0; padding: 0; }
 
@@ -81,17 +81,17 @@
     </header>
 
     <!-- ÁREA PRINCIPAL -->
-    <main id="mainContent" class="relative z-10 flex-1 flex gap-5 p-5 min-h-0 transition-opacity duration-1000">
+    <main id="mainContent" class="relative z-10 flex-1 flex items-center justify-center gap-6 p-8 min-h-0 transition-opacity duration-1000">
         
         <!-- SIDEBAR PARA BANNERS (IMÁGENES) -->
-        <div id="sidebar" class="h-full relative overflow-hidden flex-shrink-0 video-frame">
-            <img id="mainBanner" src="" class="absolute inset-0 w-full h-full object-cover z-10 opacity-0 transition-opacity duration-1000 drop-shadow-2xl" />
+        <div id="sidebar" class="relative overflow-hidden flex-shrink-0 video-frame aspect-[9/13] w-[28%] max-h-full">
+            <img id="mainBanner" src="" class="absolute inset-0 w-full h-full object-contain z-10 opacity-0 transition-opacity duration-1000" />
             <div id="emptyBannerText" class="absolute inset-0 flex items-center justify-center text-slate-400 font-bold uppercase tracking-widest text-xs opacity-50 z-0">Sin Banners</div>
         </div>
 
-        <div class="flex-1 min-w-0 h-full relative overflow-hidden flex items-center justify-center video-frame">
-            <video id="mainVideo2" class="absolute inset-0 w-full h-full object-cover z-10 opacity-0 drop-shadow-2xl" playsinline webkit-playsinline></video>
-            <video id="mainVideo" class="absolute inset-0 w-full h-full object-cover z-10 opacity-0 drop-shadow-2xl" playsinline webkit-playsinline></video>
+        <div class="flex-1 relative overflow-hidden flex items-center justify-center video-frame aspect-video max-h-full">
+            <video id="mainVideo2" class="absolute inset-0 w-full h-full object-contain z-10 opacity-0" playsinline webkit-playsinline></video>
+            <video id="mainVideo" class="absolute inset-0 w-full h-full object-contain z-10 opacity-0" playsinline webkit-playsinline></video>
             
             <div id="emptyVideoText" class="absolute inset-0 flex flex-col items-center justify-center bg-transparent z-0">
                 <img src="LOGO COOSAJO SIN ESLOGAN.png" class="h-24 opacity-20 mb-4 brightness-0 invert" onerror="this.style.display='none'">
@@ -183,7 +183,7 @@
                 await setDoc(doc(db, "artifacts", "broadcast-system", "agencies", agencyId), {
                     lastPing: Date.now(),
                     status: currentStatus,
-                    version: "1.0.43",
+                    version: "1.0.44",
                     peerConnected: peer && !peer.disconnected
                 }, { merge: true }); // <-- MERGE TRUE PARA NO SOBRESCRIBIR COMANDOS DE REINICIO
             } catch(e) { console.error("Heartbeat fail", e); }
