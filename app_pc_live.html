@@ -184,7 +184,7 @@
                 await setDoc(doc(db, "artifacts", "broadcast-system", "agencies", agencyId), {
                     lastPing: Date.now(),
                     status: currentStatus,
-                    version: "1.0.40",
+                    version: "1.0.41",
                     peerConnected: peer && !peer.disconnected
                 }, { merge: true }); // <-- MERGE TRUE PARA NO SOBRESCRIBIR COMANDOS DE REINICIO
             } catch(e) { console.error("Heartbeat fail", e); }
@@ -262,6 +262,12 @@
                         window.lastPrompterTimestamp = state.prompterCommand.timestamp;
                         window.electronAPI.controlPrompter(state.prompterCommand.action);
                     }
+                }
+                
+                if (state.muteVideos !== undefined) {
+                    window.globalMuteVideos = state.muteVideos;
+                    if (mainVideo) mainVideo.muted = window.globalMuteVideos;
+                    if (mainVideo2) mainVideo2.muted = window.globalMuteVideos;
                 }
                 
                 if (state.isLive && state.masterId) {
@@ -446,7 +452,8 @@
             }
 
             activeVid.style.opacity = "1";
-            activeVid.muted = false;
+            activeVid.currentTime = 0;
+            activeVid.muted = window.globalMuteVideos || false;
             activeVid.volume = 1.0;
             
             // Ocultar el inactivo
